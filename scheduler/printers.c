@@ -94,11 +94,11 @@ cupsdAddPrinter(const char *name)	/* I - Name of printer */
   p->accepting   = 0;
   p->shared      = DefaultShared;
 
-  cupsRWLockWrite(&MimeDatabase->lock);
+  cupsRWLockWrite(&MimeLock);
 
-  p->filetype    = mimeAddType(MimeDatabase, "printer", name);
+  p->filetype = mimeAddType(MimeDatabase, "printer", name);
 
-  cupsRWUnlock(&MimeDatabase->lock);
+  cupsRWUnlock(&MimeLock);
 
   cupsdSetString(&p->job_sheets[0], "none");
   cupsdSetString(&p->job_sheets[1], "none");
@@ -598,10 +598,25 @@ cupsdCreateCommonData(void)
   /* printer-strings-languages-supported */
   for (lang = Languages, attr = NULL; lang; lang = lang->next)
   {
+    char	templang[256],		// Temporary language tag0
+		*tempptr,		// Pointer into temporary language
+		*langptr;		// Pointer into language tag
+
+    // Convert locale ID to a language tag...
+    for (tempptr = templang, langptr = lang->language; *langptr && tempptr < (templang + sizeof(templang) - 1); langptr ++)
+    {
+      if (*langptr == '_')
+        *tempptr++ = '-';
+      else
+        *tempptr++ = tolower(*langptr & 255);
+    }
+    *tempptr = '\0';
+
+    // Add it to the list of supported languages...
     if (attr)
-      ippSetString(CommonData, &attr, ippGetCount(attr), lang->language);
+      ippSetString(CommonData, &attr, ippGetCount(attr), templang);
     else
-      attr = ippAddString(CommonData, IPP_TAG_PRINTER, IPP_TAG_LANGUAGE, "printer-strings-languages-supported", NULL, lang->language);
+      attr = ippAddString(CommonData, IPP_TAG_PRINTER, IPP_TAG_LANGUAGE, "printer-strings-languages-supported", NULL, templang);
   }
 
   /* server-is-sharing-printers */
@@ -732,7 +747,7 @@ cupsdDeletePrinter(
   if (p->printers != NULL)
     free(p->printers);
 
-  cupsRWLockWrite(&MimeDatabase->lock);
+  cupsRWLockWrite(&MimeLock);
 
   delete_printer_filters(p);
 
@@ -747,7 +762,7 @@ cupsdDeletePrinter(
   mimeDeleteType(MimeDatabase, p->filetype);
   mimeDeleteType(MimeDatabase, p->prefiltertype);
 
-  cupsRWUnlock(&MimeDatabase->lock);
+  cupsRWUnlock(&MimeLock);
 
   cupsdFreeStrings(&(p->users));
   cupsdFreeQuotas(p);
@@ -1397,7 +1412,7 @@ cupsdRenamePrinter(
   * Rename the printer type...
   */
 
-  cupsRWLockWrite(&MimeDatabase->lock);
+  cupsRWLockWrite(&MimeLock);
 
   mimeDeleteType(MimeDatabase, p->filetype);
   p->filetype = mimeAddType(MimeDatabase, "printer", name);
@@ -1408,7 +1423,7 @@ cupsdRenamePrinter(
     p->prefiltertype = mimeAddType(MimeDatabase, "prefilter", name);
   }
 
-  cupsRWUnlock(&MimeDatabase->lock);
+  cupsRWUnlock(&MimeLock);
 
  /*
   * Rename the printer...
@@ -2227,13 +2242,14 @@ cupsdSetPrinterAttrs(cupsd_printer_t *p)/* I - Printer to setup */
     cupsdCreateCommonData();
 
   cupsRWLockWrite(&p->lock);
-  cupsRWLockWrite(&MimeDatabase->lock);
 
  /*
   * Clear out old filters, if any...
   */
 
+  cupsRWLockWrite(&MimeLock);
   delete_printer_filters(p);
+  cupsRWUnlock(&MimeLock);
 
  /*
   * Figure out the authentication that is required for the printer.
@@ -2404,14 +2420,12 @@ cupsdSetPrinterAttrs(cupsd_printer_t *p)/* I - Printer to setup */
     * Add filters for printer...
     */
 
-    cupsdSetPrinterReasons(p, "-cups-missing-filter-warning,"
-			      "cups-insecure-filter-warning");
+    cupsRWLockWrite(&MimeLock);
+    cupsdSetPrinterReasons(p, "-cups-missing-filter-warning,cups-insecure-filter-warning");
 
     if (p->pc && p->pc->filters)
     {
-      for (filter = (char *)cupsArrayFirst(p->pc->filters);
-	   filter;
-	   filter = (char *)cupsArrayNext(p->pc->filters))
+      for (filter = (char *)cupsArrayFirst(p->pc->filters); filter; filter = (char *)cupsArrayNext(p->pc->filters))
 	add_printer_filter(p, p->filetype, filter);
     }
     else if (!(p->type & CUPS_PTYPE_REMOTE))
@@ -2427,8 +2441,7 @@ cupsdSetPrinterAttrs(cupsd_printer_t *p)/* I - Printer to setup */
       * Add a PostScript filter, since this is still possibly PS printer.
       */
 
-      add_printer_filter(p, p->filetype,
-			 "application/vnd.cups-postscript 0 -");
+      add_printer_filter(p, p->filetype, "application/vnd.cups-postscript 0 -");
     }
 
     if (p->pc && p->pc->prefilters)
@@ -2436,12 +2449,12 @@ cupsdSetPrinterAttrs(cupsd_printer_t *p)/* I - Printer to setup */
       if (!p->prefiltertype)
 	p->prefiltertype = mimeAddType(MimeDatabase, "prefilter", p->name);
 
-      for (filter = (char *)cupsArrayFirst(p->pc->prefilters);
-	   filter;
-	   filter = (char *)cupsArrayNext(p->pc->prefilters))
+      for (filter = (char *)cupsArrayFirst(p->pc->prefilters); filter; filter = (char *)cupsArrayNext(p->pc->prefilters))
 	add_printer_filter(p, p->prefiltertype, filter);
     }
   }
+
+  cupsRWUnlock(&MimeLock);
 
  /*
   * Copy marker attributes as needed...
@@ -2546,9 +2559,9 @@ cupsdSetPrinterAttrs(cupsd_printer_t *p)/* I - Printer to setup */
   * Populate the document-format-supported attribute...
   */
 
+  cupsRWLockWrite(&MimeLock);
   add_printer_formats(p);
-
-  cupsRWUnlock(&MimeDatabase->lock);
+  cupsRWUnlock(&MimeLock);
 
  /*
   * Add name-default attributes...
@@ -3483,18 +3496,14 @@ add_printer_filter(
   * Add the filter to the MIME database, supporting wildcards as needed...
   */
 
-  for (temptype = mimeFirstType(MimeDatabase);
-       temptype;
-       temptype = mimeNextType(MimeDatabase))
-    if (((super[0] == '*' && _cups_strcasecmp(temptype->super, "printer")) ||
-         !_cups_strcasecmp(temptype->super, super)) &&
-        (type[0] == '*' || !_cups_strcasecmp(temptype->type, type)))
+  for (temptype = mimeFirstType(MimeDatabase); temptype; temptype = mimeNextType(MimeDatabase))
+  {
+    if (((super[0] == '*' && _cups_strcasecmp(temptype->super, "printer")) || !_cups_strcasecmp(temptype->super, super)) && (type[0] == '*' || !_cups_strcasecmp(temptype->type, type)))
     {
       if (desttype != filtertype)
       {
         cupsdLogPrinter(p, CUPSD_LOG_DEBUG2, "add_printer_filter: Adding filter %s/%s %s/%s %d %s", temptype->super, temptype->type, desttype->super, desttype->type, cost, program);
-        filterptr = mimeAddFilter(MimeDatabase, temptype, desttype, cost,
-	                          program);
+        filterptr = mimeAddFilter(MimeDatabase, temptype, desttype, cost, program);
 
         if (!mimeFilterLookup(MimeDatabase, desttype, filtertype))
         {
@@ -3505,13 +3514,13 @@ add_printer_filter(
       else
       {
         cupsdLogPrinter(p, CUPSD_LOG_DEBUG2, "add_printer_filter: Adding filter %s/%s %s/%s %d %s", temptype->super, temptype->type, filtertype->super, filtertype->type, cost, program);
-        filterptr = mimeAddFilter(MimeDatabase, temptype, filtertype, cost,
-	                          program);
+        filterptr = mimeAddFilter(MimeDatabase, temptype, filtertype, cost, program);
       }
 
       if (filterptr)
 	filterptr->maxsize = maxsize;
     }
+  }
 }
 
 
@@ -3524,14 +3533,12 @@ add_printer_formats(cupsd_printer_t *p)	/* I - Printer */
 {
   int		i;			/* Looping var */
   mime_type_t	*type;			/* Current MIME type */
-  cups_array_t	*filters;		/* Filters */
   ipp_attribute_t *attr;		/* document-format-supported attribute */
   char		mimetype[MIME_MAX_SUPER + MIME_MAX_TYPE + 2];
 					/* MIME type name */
   const char	*preferred = "image/urf";
 					/* document-format-preferred value */
   char		pdl[1024];		/* Buffer to build pdl list */
-  mime_filter_t	*filter;		/* MIME filter looping var */
 
 
  /*
@@ -3544,86 +3551,60 @@ add_printer_formats(cupsd_printer_t *p)	/* I - Printer */
 
   if (p->raw)
   {
-    ippAddStrings(p->attrs, IPP_TAG_PRINTER, IPP_CONST_TAG(IPP_TAG_MIMETYPE), "document-format-supported", NumMimeTypes, NULL, MimeTypes);
+    ippAddString(p->attrs, IPP_TAG_PRINTER, IPP_CONST_TAG(IPP_TAG_MIMETYPE), "document-format-supported", NULL, "application/octet-stream");
     return;
   }
 
  /*
-  * Otherwise, loop through the supported MIME types and see if there
-  * are filters for them...
+  * Otherwise, get the list of supported source types...
   */
 
-  cupsdLogPrinter(p, CUPSD_LOG_DEBUG2, "add_printer_formats: %d types, %d filters", mimeNumTypes(MimeDatabase), mimeNumFilters(MimeDatabase));
+  cupsdLogPrinter(p, CUPSD_LOG_DEBUG2, "add_printer_formats: filetype=%s/%s", p->filetype ? p->filetype->super : "null", p->filetype ? p->filetype->type : "null");
 
-  p->filetypes = cupsArrayNew(NULL, NULL);
-
-  for (type = mimeFirstType(MimeDatabase);
-       type;
-       type = mimeNextType(MimeDatabase))
-  {
-    if (!_cups_strcasecmp(type->super, "printer"))
-      continue;
-
-    snprintf(mimetype, sizeof(mimetype), "%s/%s", type->super, type->type);
-
-    if ((filters = mimeFilter(MimeDatabase, type, p->filetype, NULL)) != NULL)
-    {
-      cupsdLogPrinter(p, CUPSD_LOG_DEBUG2, "add_printer_formats: %s needs %d filters", mimetype, cupsArrayCount(filters));
-
-      cupsArrayDelete(filters);
-      cupsArrayAdd(p->filetypes, type);
-
-      if (!strcasecmp(mimetype, "application/pdf"))
-        preferred = "application/pdf";
-    }
-    else
-      cupsdLogPrinter(p, CUPSD_LOG_DEBUG2, "add_printer_formats: %s not supported", mimetype);
-  }
+  p->filetypes = mimeGetFilterTypes(MimeDatabase, p->filetype, NULL);
 
  /*
   * Add the file formats that can be filtered...
   */
 
-  if ((type = mimeType(MimeDatabase, "application", "octet-stream")) == NULL ||
-      !cupsArrayFind(p->filetypes, type))
+  if ((type = mimeType(MimeDatabase, "application", "octet-stream")) != NULL && !cupsArrayFind(p->filetypes, type))
     i = 1;
   else
     i = 0;
 
   cupsdLogPrinter(p, CUPSD_LOG_DEBUG2, "add_printer_formats: %d supported types", cupsArrayCount(p->filetypes) + i);
 
-  attr = ippAddStrings(p->attrs, IPP_TAG_PRINTER, IPP_TAG_MIMETYPE,
-                       "document-format-supported",
-                       cupsArrayCount(p->filetypes) + i, NULL, NULL);
+  if ((attr = ippAddStrings(p->attrs, IPP_TAG_PRINTER, IPP_TAG_MIMETYPE, "document-format-supported", cupsArrayCount(p->filetypes) + i, NULL, NULL)) == NULL)
+  {
+    cupsdLogPrinter(p, CUPSD_LOG_ERROR, "Unable to create document-format-supported attribute.");
+    return;
+  }
 
   if (i)
+  {
     attr->values[0].string.text = _cupsStrAlloc("application/octet-stream");
+    cupsdLogPrinter(p, CUPSD_LOG_DEBUG2, "add_printer_formats: document-format-supported[0]='application/octet-stream'");
+  }
 
   for (type = (mime_type_t *)cupsArrayFirst(p->filetypes); type; i ++, type = (mime_type_t *)cupsArrayNext(p->filetypes))
   {
     snprintf(mimetype, sizeof(mimetype), "%s/%s", type->super, type->type);
 
     attr->values[i].string.text = _cupsStrAlloc(mimetype);
+    cupsdLogPrinter(p, CUPSD_LOG_DEBUG2, "add_printer_formats: document-format-supported[%d]='%s'", i, mimetype);
+
+    if (!strcmp(mimetype, "application/pdf"))
+      preferred = "application/pdf";
   }
 
   ippAddString(p->attrs, IPP_TAG_PRINTER, IPP_CONST_TAG(IPP_TAG_MIMETYPE), "document-format-preferred", NULL, preferred);
-
- /*
-  * We only support raw printing if this is not a Tioga PrintJobMgr based
-  * queue and if application/octet-stream is a known type...
-  */
-
-  for (filter = (mime_filter_t *)cupsArrayFirst(MimeDatabase->filters); filter; filter = (mime_filter_t *)cupsArrayNext(MimeDatabase->filters))
-  {
-    if (filter->dst == p->filetype && strstr(filter->filter, "PrintJobMgr"))
-      break;
-  }
-
-  pdl[0] = '\0';
+  cupsdLogPrinter(p, CUPSD_LOG_DEBUG2, "add_printer_formats: document-format-preferred='%s'", preferred);
 
  /*
   * Then list a bunch of formats that are supported by the printer...
   */
+
+  pdl[0] = '\0';
 
   for (type = (mime_type_t *)cupsArrayFirst(p->filetypes); type; type = (mime_type_t *)cupsArrayNext(p->filetypes))
   {
@@ -3696,9 +3677,8 @@ delete_printer_filters(
   * type == printer...
   */
 
-  for (filter = mimeFirstFilter(MimeDatabase);
-       filter;
-       filter = mimeNextFilter(MimeDatabase))
+  for (filter = mimeFirstFilter(MimeDatabase); filter; filter = mimeNextFilter(MimeDatabase))
+  {
     if (filter->dst == p->filetype || filter->dst == p->prefiltertype ||
         cupsArrayFind(p->dest_types, filter->dst))
     {
@@ -3706,19 +3686,21 @@ delete_printer_filters(
       * Delete the current filter...
       */
 
+      cupsdLogPrinter(p, CUPSD_LOG_DEBUG2, "delete_printer_filters: Removing filter '%s' (%s/%s to %s/%s, cost %d)", filter->filter, filter->src->super, filter->src->type, filter->dst->super, filter->dst->type, filter->cost);
       mimeDeleteFilter(MimeDatabase, filter);
     }
+  }
 
-  for (type = (mime_type_t *)cupsArrayFirst(p->dest_types);
-       type;
-       type = (mime_type_t *)cupsArrayNext(p->dest_types))
+  for (type = (mime_type_t *)cupsArrayFirst(p->dest_types); type; type = (mime_type_t *)cupsArrayNext(p->dest_types))
+  {
+    cupsdLogPrinter(p, CUPSD_LOG_DEBUG2, "delete_printer_filters: Removing type %s/%s", type->super, type->type);
     mimeDeleteType(MimeDatabase, type);
+  }
 
   cupsArrayDelete(p->dest_types);
   p->dest_types = NULL;
 
-  cupsdSetPrinterReasons(p, "-cups-insecure-filter-warning"
-                            ",cups-missing-filter-warning");
+  cupsdSetPrinterReasons(p, "-cups-insecure-filter-warning,cups-missing-filter-warning");
 }
 
 
@@ -3767,8 +3749,11 @@ load_ppd(cupsd_printer_t *p)		/* I - Printer */
   int		xdpi,			/* Horizontal resolution */
 		ydpi;			/* Vertical resolution */
   const char	*resptr;		/* Pointer into resolution keyword */
-  pwg_size_t	*pwgsize;		/* Current PWG size */
-  pwg_map_t	*pwgsource,		/* Current PWG source */
+  pwg_size_t	*defsize = NULL,	/* Default PWG size */
+		*pwgsize;		/* Current PWG size */
+  pwg_map_t	*defsource = NULL,	/* Default PWG source */
+		*deftype = NULL,	/* Default PWG type */
+		*pwgsource,		/* Current PWG source */
 		*pwgtype;		/* Current PWG type */
   ipp_attribute_t *attr;		/* Attribute data */
   _ipp_value_t	*val;			/* Attribute value */
@@ -3780,8 +3765,9 @@ load_ppd(cupsd_printer_t *p)		/* I - Printer */
 		margins[16];		/* media-*-margin-supported values */
   const char	*filter,		/* Current filter */
 		*mandatory;		/* Current mandatory attribute */
-  ipp_attribute_t *media_col_ready,	/* media-col-ready attribute */
-		*media_ready;		/* media-ready attribute */
+  ipp_attribute_t *media_col_ready = NULL,
+					/* media-col-ready attribute */
+		*media_ready = NULL;	/* media-ready attribute */
   int		num_urf;		/* Number of urf-supported values */
   const char	*urf[16],		/* urf-supported values */
 		*urf_prefix;		/* Prefix string for value */
@@ -4083,6 +4069,13 @@ load_ppd(cupsd_printer_t *p)		/* I - Printer */
         {
           finishings[num_finishings ++] = IPP_FINISHINGS_BOOKLET_MAKER;
         }
+        else if (!strcmp(name, "*ColorModel"))
+        {
+          if (!strcmp(value, "Gray"))
+            ippAddString(col, IPP_TAG_ZERO, IPP_CONST_TAG(IPP_TAG_KEYWORD), "print-color-mode", NULL, "monochrome");
+          else
+            ippAddString(col, IPP_TAG_ZERO, IPP_CONST_TAG(IPP_TAG_KEYWORD), "print-color-mode", NULL, "color");
+        }
         else if ((!strcmp(name, "*FoldType") || !strcmp(name, "*PunchMedia") || !strcmp(name, "*StapleLocation")) && num_finishings < (int)(sizeof(finishings) / sizeof(finishings[0])))
         {
           finishings[num_finishings ++] = ippEnumValue("finishings", value);
@@ -4120,7 +4113,7 @@ load_ppd(cupsd_printer_t *p)		/* I - Printer */
           else
             ippAddInteger(col, IPP_TAG_ZERO, IPP_TAG_ENUM, "print-quality", IPP_QUALITY_NORMAL);
         }
-        else if (!strcmp(name, "Duplex"))
+        else if (!strcmp(name, "*Duplex"))
         {
           if (!strcmp(value, "None"))
             ippAddString(col, IPP_TAG_ZERO, IPP_TAG_KEYWORD, "sides", NULL, "one-sided");
@@ -4132,7 +4125,7 @@ load_ppd(cupsd_printer_t *p)		/* I - Printer */
         else
         {
           // Something else...
-          ippAddString(col, IPP_TAG_ZERO, IPP_TAG_KEYWORD, name, NULL, value);
+          ippAddString(col, IPP_TAG_ZERO, IPP_TAG_KEYWORD, name + 1, NULL, value);
         }
       }
 
@@ -4300,23 +4293,21 @@ load_ppd(cupsd_printer_t *p)		/* I - Printer */
       */
 
       if ((size = ppdPageSize(ppd, NULL)) != NULL)
-	pwgsize = _ppdCacheGetSize(p->pc, size->name, size);
+	defsize = _ppdCacheGetSize(p->pc, size->name, size);
       else
-        pwgsize = NULL;
+        defsize = NULL;
 
-      ippAddString(p->ppd_attrs, IPP_TAG_PRINTER, IPP_TAG_KEYWORD,
-		   "media-default", NULL,
-		   pwgsize ? pwgsize->map.pwg : "unknown");
+      ippAddString(p->ppd_attrs, IPP_TAG_PRINTER, IPP_TAG_KEYWORD, "media-default", NULL, defsize ? defsize->map.pwg : "unknown");
 
      /*
       * media-col-default
       */
 
-      if (pwgsize)
+      if (defsize)
       {
         ipp_t	*col;			/* Collection value */
 
-	col = new_media_col(pwgsize);
+	col = new_media_col(defsize);
 
         if ((ppd_attr = ppdFindAttr(ppd, "DefaultMediaType", NULL)) != NULL)
         {
@@ -4326,7 +4317,8 @@ load_ppd(cupsd_printer_t *p)		/* I - Printer */
           {
             if (!strcmp(pwgtype->ppd, ppd_attr->value))
             {
-              ippAddString(col, IPP_TAG_PRINTER, IPP_TAG_KEYWORD, "media-type", NULL, pwgtype->pwg);
+              deftype = pwgtype;
+              ippAddString(col, IPP_TAG_PRINTER, IPP_TAG_KEYWORD, "media-type", NULL, deftype->pwg);
               break;
             }
           }
@@ -4340,7 +4332,8 @@ load_ppd(cupsd_printer_t *p)		/* I - Printer */
           {
             if (!strcmp(pwgsource->ppd, ppd_attr->value))
             {
-              ippAddString(col, IPP_TAG_PRINTER, IPP_TAG_KEYWORD, "media-source", NULL, pwgsource->pwg);
+              defsource = pwgsource;
+              ippAddString(col, IPP_TAG_PRINTER, IPP_TAG_KEYWORD, "media-source", NULL, defsource->pwg);
               break;
             }
           }
@@ -4357,6 +4350,8 @@ load_ppd(cupsd_printer_t *p)		/* I - Printer */
       num_media = p->pc->num_sizes;
       if (p->pc->custom_min_keyword)
 	num_media += 2;
+      if (defsize && !strncmp(defsize->map.pwg, "custom_", 7))
+        num_media ++;
 
       if ((attr = ippAddStrings(p->ppd_attrs, IPP_TAG_PRINTER, IPP_TAG_KEYWORD,
 			        "media-supported", num_media, NULL,
@@ -4368,6 +4363,13 @@ load_ppd(cupsd_printer_t *p)		/* I - Printer */
 	     i > 0;
 	     i --, pwgsize ++, val ++)
 	  val->string.text = _cupsStrAlloc(pwgsize->map.pwg);
+
+        if (defsize && !strncmp(defsize->map.pwg, "custom_", 7))
+	{
+	  // Include default custom size in media-supported...
+	  val->string.text = _cupsStrAlloc(defsize->map.pwg);
+	  val ++;
+	}
 
         if (p->pc->custom_min_keyword)
 	{
@@ -4384,6 +4386,8 @@ load_ppd(cupsd_printer_t *p)		/* I - Printer */
       num_media = p->pc->num_sizes;
       if (p->pc->custom_min_keyword)
 	num_media ++;
+      if (defsize && !strncmp(defsize->map.pwg, "custom_", 7))
+        num_media ++;
 
       if ((attr = ippAddCollections(p->ppd_attrs, IPP_TAG_PRINTER,
 				    "media-size-supported", num_media,
@@ -4400,6 +4404,15 @@ load_ppd(cupsd_printer_t *p)		/* I - Printer */
 	                "x-dimension", pwgsize->width);
 	  ippAddInteger(val->collection, IPP_TAG_PRINTER, IPP_TAG_INTEGER,
 	                "y-dimension", pwgsize->length);
+        }
+
+        if (defsize && !strncmp(defsize->map.pwg, "custom_", 7))
+        {
+          // Include default custom size in media-size-supported...
+	  val->collection = ippNew();
+	  ippAddInteger(val->collection, IPP_TAG_PRINTER, IPP_TAG_INTEGER, "x-dimension", defsize->width);
+	  ippAddInteger(val->collection, IPP_TAG_PRINTER, IPP_TAG_INTEGER, "y-dimension", defsize->length);
+	  val ++;
         }
 
         if (p->pc->custom_min_keyword)
@@ -4543,6 +4556,8 @@ load_ppd(cupsd_printer_t *p)		/* I - Printer */
       num_media = p->pc->num_sizes;
       if (p->pc->custom_min_keyword)
 	num_media ++;
+      if (defsize && !strncmp(defsize->map.pwg, "custom_", 7))
+        num_media ++;
 
       if ((attr = ippAddCollections(p->ppd_attrs, IPP_TAG_PRINTER, "media-col-database", num_media, NULL)) != NULL)
       {
@@ -4557,6 +4572,16 @@ load_ppd(cupsd_printer_t *p)		/* I - Printer */
 	  ippSetCollection(p->ppd_attrs, &attr, i, col);
 	  ippDelete(col);
 	}
+
+        if (defsize && !strncmp(defsize->map.pwg, "custom_", 7))
+        {
+          // Include default custom size in media-col-database...
+	  ipp_t *col = new_media_col(defsize);
+
+	  ippSetCollection(p->ppd_attrs, &attr, i, col);
+	  ippDelete(col);
+	  i ++;
+        }
 
        /*
 	* Add a range if the printer supports custom sizes.
@@ -4618,6 +4643,52 @@ load_ppd(cupsd_printer_t *p)		/* I - Printer */
 
 	ippDelete(col);
       }
+    }
+
+    if (defsize && cupsArrayGetCount(ReadyPaperSizes) > 0)
+    {
+      // Add default size to media[-col]-ready as needed...
+      ipp_t *col = new_media_col(defsize);
+					// media-col-ready value
+
+      if (defsource)
+      {
+	ippAddString(col, IPP_TAG_PRINTER, IPP_TAG_KEYWORD, "media-source", NULL, defsource->pwg);
+      }
+      else if (media_col_ready)
+      {
+	char	source[128];		// media-source value
+
+	snprintf(source, sizeof(source), "auto.%d", ippGetCount(media_col_ready) + 1);
+	ippAddString(col, IPP_TAG_PRINTER, IPP_TAG_KEYWORD, "media-source", NULL, source);
+      }
+      else
+      {
+	ippAddString(col, IPP_TAG_PRINTER, IPP_CONST_TAG(IPP_TAG_KEYWORD), "media-source", NULL, "auto");
+      }
+
+      if (deftype)
+	ippAddString(col, IPP_TAG_PRINTER, IPP_TAG_KEYWORD, "media-type", NULL, deftype->pwg);
+
+      if (media_ready)
+      {
+        // Only add the default size if it isn't already in the ready list...
+        if (!ippContainsString(media_ready, defsize->map.pwg))
+          ippSetString(p->ppd_attrs, &media_ready, ippGetCount(media_ready), defsize->map.pwg);
+      }
+      else
+      {
+        // Add "media-ready"...
+        media_ready = ippAddString(p->ppd_attrs, IPP_TAG_PRINTER, IPP_TAG_KEYWORD, "media-ready", NULL, defsize->map.pwg);
+      }
+
+      // Add/update media-col-ready...
+      if (media_col_ready)
+        ippSetCollection(p->ppd_attrs, &media_col_ready, ippGetCount(media_col_ready), col);
+      else
+	media_col_ready = ippAddCollection(p->ppd_attrs, IPP_TAG_PRINTER, "media-col-ready", col);
+
+      ippDelete(col);
     }
 
     ippAddString(p->ppd_attrs, IPP_TAG_PRINTER, IPP_CONST_TAG(IPP_TAG_TEXT), "mopria-certified", NULL, "1.3");

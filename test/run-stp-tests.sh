@@ -363,68 +363,67 @@ ln -s $root/templates $BASE/share
 #
 
 instfilter() {
-	# instfilter src dst format
+	# instfilter NAME FORMAT
 	#
 	# Create a dummy script for the specified format.
 	#
-	src="$1"
-	dst="$2"
-	format="$3"
+	name="$1"
+	format="$2"
 
 	case $format in
 		passthru)
-			ln -s gziptoany "$BASE/bin/filter/$dst"
+			ln -s gziptoany "$BASE/bin/filter/$name"
 			;;
 		pdf)
-			cat >"$BASE/bin/filter/$dst" <<EOF
+			cat >"$BASE/bin/filter/$name" <<EOF
 #!/bin/sh
 trap "" TERM
 trap "" PIPE
-gziptoany "$1" "$2" "$3" "$4" "$5" \$6 >/dev/null
+gziptoany "\$1" "\$2" "\$3" "\$4" "\$5" \$6 >/dev/null
 case "\$5" in
 	*media=a4* | *media=iso_a4* | *PageSize=A4*)
-		gziptoany "$1" "$2" "$3" "$4" "$5" "$root/examples/onepage-a4.pdf"
+		gziptoany "\$1" "\$2" "\$3" "\$4" "\$5" "$root/examples/onepage-a4.pdf"
 		;;
 	*)
-		gziptoany "$1" "$2" "$3" "$4" "$5" "$root/examples/onepage-letter.pdf"
+		gziptoany "\$1" "\$2" "\$3" "\$4" "\$5" "$root/examples/onepage-letter.pdf"
 		;;
 esac
 EOF
-			chmod +x "$BASE/bin/filter/$dst"
+			chmod +x "$BASE/bin/filter/$name"
 			;;
 		ps)
-			cat >"$BASE/bin/filter/$dst" <<EOF
+			cat >"$BASE/bin/filter/$name" <<EOF
 #!/bin/sh
 trap "" TERM
 trap "" PIPE
-gziptoany "$1" "$2" "$3" "$4" "$5" \$6 >/dev/null
+gziptoany "\$1" "\$2" "\$3" "\$4" "\$5" \$6 >/dev/null
 case "\$5" in
 	*media=a4* | *media=iso_a4* | *PageSize=A4*)
-		gziptoany "$1" "$2" "$3" "$4" "$5" "$root/examples/onepage-a4.ps"
+		gziptoany "\$1" "\$2" "\$3" "\$4" "\$5" "$root/examples/onepage-a4.ps"
 		;;
 	*)
-		gziptoany "$1" "$2" "$3" "$4" "$5" "$root/examples/onepage-letter.ps"
+		gziptoany "\$1" "\$2" "\$3" "\$4" "\$5" "$root/examples/onepage-letter.ps"
 		;;
 esac
 EOF
-			chmod +x "$BASE/bin/filter/$dst"
+			chmod +x "$BASE/bin/filter/$name"
 			;;
 		raster)
-			cat >"$BASE/bin/filter/$dst" <<EOF
+			cat >"$BASE/bin/filter/$name" <<EOF
 #!/bin/sh
 trap "" TERM
 trap "" PIPE
-gziptoany "$1" "$2" "$3" "$4" "$5" \$6 >/dev/null
+gziptoany "\$1" "\$2" "\$3" "\$4" "\$5" \$6 >/dev/null
 case "\$5" in
 	*media=a4* | *media=iso_a4* | *PageSize=A4*)
-		gziptoany "$1" "$2" "$3" "$4" "$5" "$root/examples/onepage-a4-300-black-1.pwg"
+		gziptoany "\$1" "\$2" "\$3" "\$4" "\$5" "$root/examples/onepage-a4-300-black-1.pwg"
 		;;
 	*)
-		gziptoany "$1" "$2" "$3" "$4" "$5" "$root/examples/onepage-letter-300-black-1.pwg"
+		gziptoany "\$1" "\$2" "\$3" "\$4" "\$5" "$root/examples/onepage-letter-300-black-1.pwg"
 		;;
 esac
 EOF
-			chmod +x "$BASE/bin/filter/$dst"
+			chmod +x "$BASE/bin/filter/$name"
 			;;
 	esac
 }
@@ -432,24 +431,25 @@ EOF
 ln -s $root/test/test.convs $BASE/share/mime
 
 if test `uname` = Darwin; then
-	instfilter cgimagetopdf imagetopdf pdf
-	instfilter cgpdftopdf pdftopdf passthru
-	instfilter cgpdftops pdftops ps
-	instfilter cgpdftoraster pdftoraster raster
-	instfilter cgtexttopdf texttopdf pdf
-	instfilter pstocupsraster pstoraster raster
+	instfilter imagetopdf pdf
+	instfilter pdftopdf passthru
+	instfilter pdftops ps
+	instfilter pdftoraster raster
+	instfilter texttopdf pdf
+	instfilter pstoraster raster
 else
-	instfilter imagetopdf imagetopdf pdf
-	instfilter pdftopdf pdftopdf passthru
-	instfilter pdftops pdftops ps
-	instfilter pdftoraster pdftoraster raster
-	instfilter pstoraster pstoraster raster
-	instfilter texttopdf texttopdf pdf
+	instfilter imagetopdf pdf
+	instfilter pdftopdf passthru
+	instfilter pdftops ps
+	instfilter pdftoraster raster
+	instfilter pstoraster raster
+	instfilter texttopdf pdf
 
 	if test -d /usr/share/cups/charsets; then
 		ln -s /usr/share/cups/charsets $BASE/share
 	fi
 fi
+
 
 #
 # Then create the necessary config files...
@@ -497,7 +497,7 @@ fi
 
 cat >$BASE/cups-files.conf <<EOF
 FileDevice yes
-Printcap
+Printcap $BASE/printcap
 User $user
 ServerRoot $BASE
 StateDir $BASE
@@ -1215,14 +1215,14 @@ cat str-trailer.html >>$strfile
 echo ""
 for file in $BASE/log/*_log; do
         baselog=`basename $file`
-        cp $file $baselog-$date-$user
-        echo "Copied log file \"$baselog-$date-$user\" to test directory."
+        cp $file $baselog-$date-$user.txt
+        echo "Copied log file \"$baselog-$date-$user.txt\" to test directory."
 done
 cp $strfile .
 echo "Copied report file \"cups-str-$date-$user.html\" to test directory."
 
 # Clean out old failure log files after 1 week...
-find . -name \*_log-\*-$user -a -mtime +7 -print -exec rm -f '{}' \; | awk '{print "Removed old log file \"" substr($1,3) "\" from test directory."}'
+find . -name \*_log-\*-$user.txt -a -mtime +7 -print -exec rm -f '{}' \; | awk '{print "Removed old log file \"" substr($1,3) "\" from test directory."}'
 find . -name cups-str-\*-$user.html -a -mtime +7 -print -exec rm -f '{}' \; | awk '{print "Removed old report file \"" $1 "\" from test directory."}'
 
 echo ""

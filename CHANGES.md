@@ -84,6 +84,10 @@ Changes in CUPS v2.5b1 (YYYY-MM-DD)
   values.
 - Updated the setuid/gid checks in libcups to use `getauxval` on Linux to avoid
   potential security issues (Issue #1258)
+- Updated the ready media support to report the default paper size/source/type
+  from the PPD file (Issue #1388)
+- Updated the scheduler with a more efficient algorithm for determining the
+  supported document formats for a printer (Issue #1392)
 - Deprecated the "page-border" Job Template attribute (Issue #1020)
 - Removed the `cups-config` utility (use `pkg-config` instead)
 - Fixed use-after-free in `cupsdAcceptClient()` when we log warning during error
@@ -154,6 +158,7 @@ Changes in CUPS v2.5b1 (YYYY-MM-DD)
 - Fixed unreachable block in IPP backend (Issue #1351)
 - Fixed memory leak in _cupsConvertOptions (Issue #1354)
 - Fixed missing write check in `cupsFileOpen/Fd` (Issue #1360)
+- Fixed error recovery when scanning for PPDs in `cups-driverd` (Issue #1416)
 - Removed hash support for SHA2-512-224 and SHA2-512-256.
 - Removed `mantohtml` script for generating html pages (use
   `https://www.msweet.org/mantohtml/`)

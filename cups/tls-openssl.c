@@ -96,7 +96,7 @@ cupsAreCredentialsValidForName(
     STACK_OF(GENERAL_NAME) *names = NULL;
 					// subjectAltName values
 
-    DEBUG_printf("1cupsAreCredentialsValidForName: certs=%p(num=%d), cert=%p", certs, sk_X509_num(certs), cert);
+    DEBUG_printf("1cupsAreCredentialsValidForName: certs=%p(num=%d), cert=%p", (void *)certs, sk_X509_num(certs), (void *)cert);
 
     X509_NAME_get_text_by_NID(X509_get_subject_name(cert), NID_commonName, subjectName, sizeof(subjectName));
     DEBUG_printf("1cupsAreCredentialsValidForName: subjectName=\"%s\"", subjectName);
@@ -116,7 +116,7 @@ cupsAreCredentialsValidForName(
     if (!result)
     {
       names = X509_get_ext_d2i(cert, NID_subject_alt_name, /*crit*/NULL, /*idx*/NULL);
-      DEBUG_printf("1cupsAreCredentialsValidForName: names=%p", names);
+      DEBUG_printf("1cupsAreCredentialsValidForName: names=%p", (void *)names);
     }
 
     if (names)
@@ -1900,7 +1900,7 @@ _httpTLSStart(http_t *http)		// I - Connection to server
 
       if (!cupsCreateCredentials(tls_keypath, false, CUPS_CREDPURPOSE_SERVER_AUTH, CUPS_CREDTYPE_DEFAULT, CUPS_CREDUSAGE_DEFAULT_TLS, NULL, NULL, NULL, NULL, NULL, cn, NULL, 0, NULL, NULL, time(NULL) + 3650 * 86400))
       {
-	DEBUG_puts("4_httpTLSStart: cupsCreateCredentials failed.");
+	DEBUG_printf("4_httpTLSStart: cupsCreateCredentials failed: %s", cupsGetErrorString());
 	http->error  = errno = EINVAL;
 	http->status = HTTP_STATUS_ERROR;
 	SSL_CTX_free(context);
@@ -2190,11 +2190,14 @@ http_bio_read(BIO  *h,			// I - BIO data
   http = (http_t *)BIO_get_data(h);
   DEBUG_printf("9http_bio_read: http=%p", (void *)http);
 
-  if (!http->blocking)
+  if (!http->blocking || http->timeout_value > 0.0)
   {
     // Make sure we have data before we read...
-    if (!_httpWait(http, 10000, 0))
+    while (!_httpWait(http, http->wait_value, 0))
     {
+      if (http->timeout_cb && (*http->timeout_cb)(http, http->timeout_data))
+	continue;
+
 #ifdef WIN32
       http->error = WSAETIMEDOUT;
 #else
